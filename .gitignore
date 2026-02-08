@@ -1,0 +1,22 @@
+AUTHORS
+build/*
+ChangeLog
+
+# Samples are generated dynamically
+etc/neutron/*.sample
+
+# For testing purposes, some may leave conf files in this
+etc/neutron/*.conf
+etc/neutron/*.ini
+etc/neutron/plugins
+venv/
+.venv/
+
+# Python stuff
+*.pyc
+*.egg-info/
+
+# vim vim
+*.sw?
+!/.gitignore
+

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["pbr>=6.1.1"]
+build-backend = "pbr.build"
+
+[project]
+name = "neutron-wireguard"
+description = "Wireguard extension for OpenStack Neutron"
+authors = [
+    {name = "OpenStack", email = "openstack-discuss@lists.openstack.org"},
+]
+readme = {file = "README.rst", content-type = "text/x-rst"}
+license = {text = "Apache-2.0"}
+dynamic = ["version", "dependencies"]
+requires-python = ">=3.10"
+classifiers = [
+  "Environment :: OpenStack",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.urls]
+Homepage = "https://opensteak.fr"
+Repository = "https://github.com/arnaudmorin/neutron-wireguard"
+
+[tool.setuptools]
+packages = [
+    "neutron_wireguard"
+]
+
+[project.entry-points."oslo.config.opts"]
+"neutron.wireguard" = "neutron_wireguard.opts:list_opts"
+
+[project.entry-points."neutron.db.alembic_migrations"]
+neutron-wireguard = "neutron_wireguard.db.migration:alembic_migrations"
+
+[project.entry-points."neutron.service_plugins"]
+wireguard = "neutron_wireguard.services.plugin:WireguardPlugin"
+
+[project.entry-points."neutron.agent.l3.extensions"]
+wireguard = "neutron_wireguard.agent.wireguard:L3WithWireguard"
+
+[project.scripts]
+neutron-wireguard-rpc = "neutron_wireguard.cmd.rpc_server:main"
