@@ -27,6 +27,11 @@ from neutron_wireguard.rpc import agent as rpc_agent
 
 LOG = logging.getLogger(__name__)
 
+# Address scope mark used by Neutron L3 agent to allow forwarding
+# between networks in the same address scope. Traffic entering from
+# WireGuard interfaces must be marked to pass the scope check.
+ADDRESS_SCOPE_MARK = '0x4000000/0xffff0000'
+
 WIREGUARD_CONF_TEMPLATE = """[Interface]
 PrivateKey = {private_key}
 ListenPort = {port}
@@ -177,6 +182,38 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         except Exception:
             return False
 
+    def _add_address_scope_mark(self, namespace, if_name):
+        """Add iptables mangle rule to mark incoming traffic.
+
+        This marks traffic entering from the WireGuard interface with
+        the address scope mark, allowing it to be forwarded to networks
+        in the same address scope (bypassing neutron-l3-agent-scope check).
+        """
+        # Check if rule already exists
+        check_cmd = ['iptables', '-t', 'mangle', '-C', 'PREROUTING',
+                     '-i', if_name, '-j', 'MARK',
+                     '--set-xmark', ADDRESS_SCOPE_MARK]
+        try:
+            self._execute(namespace, check_cmd)
+            LOG.debug("Address scope mark rule already exists for %s", if_name)
+            return
+        except Exception:
+            pass  # Rule doesn't exist, add it
+
+        add_cmd = ['iptables', '-t', 'mangle', '-A', 'PREROUTING',
+                   '-i', if_name, '-j', 'MARK',
+                   '--set-xmark', ADDRESS_SCOPE_MARK]
+        self._execute(namespace, add_cmd)
+        LOG.info("Added address scope mark rule for interface %s", if_name)
+
+    def _remove_address_scope_mark(self, namespace, if_name):
+        """Remove iptables mangle rule for address scope marking."""
+        remove_cmd = ['iptables', '-t', 'mangle', '-D', 'PREROUTING',
+                      '-i', if_name, '-j', 'MARK',
+                      '--set-xmark', ADDRESS_SCOPE_MARK]
+        self._execute(namespace, remove_cmd, check_exit_code=False)
+        LOG.info("Removed address scope mark rule for interface %s", if_name)
+
     def _ensure_wg_interface(self, namespace, if_name):
         """Ensure the wireguard interface exists, create if missing."""
         if not self._interface_exists(namespace, if_name):
@@ -200,6 +237,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
             self._set_interface_address(namespace, if_name,
                                         wireguard.get('ipaddress'))
             self._bring_up_wg_interface(namespace, if_name)
+            self._add_address_scope_mark(namespace, if_name)
             # Report success to plugin
             self.server_rpc.update_wireguard_status(
                 context, wireguard_id, lib_constants.ACTIVE)
@@ -228,6 +266,8 @@ class WireguardAgent(l3_extension.L3AgentExtension):
                                            wireguard.get('ipaddress'))
             if created:
                 self._bring_up_wg_interface(namespace, if_name)
+            # Ensure address scope mark rule exists (idempotent)
+            self._add_address_scope_mark(namespace, if_name)
             # Report success to plugin
             self.server_rpc.update_wireguard_status(
                 context, wireguard_id, lib_constants.ACTIVE)
@@ -242,6 +282,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         namespace = self._get_snat_namespace(router_id)
         if_name = self._get_interface_name(wireguard_id)
 
+        self._remove_address_scope_mark(namespace, if_name)
         self._destroy_wg_interface(namespace, if_name)
         self._remove_wireguard_conf(router_id, wireguard_id)
 
