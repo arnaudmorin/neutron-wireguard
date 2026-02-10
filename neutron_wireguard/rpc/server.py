@@ -68,3 +68,12 @@ class WireguardServerRpcCallback:
         result = self.plugin.update_wireguard_status(context, wireguard_id,
                                                      status)
         return result
+
+    def get_wireguards_for_host(self, context, host):
+        """Return all wireguards that should be configured on the given host.
+
+        This is called by the L3 agent extension to sync wireguard
+        configurations on startup or reconnection.
+        """
+        LOG.info("Agent %s requesting wireguard sync", host)
+        return self.plugin.get_wireguards_for_host(context, host)

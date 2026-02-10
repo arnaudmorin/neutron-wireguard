@@ -131,3 +131,37 @@ class WireguardPlugin(wg_db.WireguardPluginDb):
         for host in self._get_hosts_for_router(context, router_id):
             self.agent_rpc.wireguard_deleted(context, wireguard_id,
                                                   router_id, host)
+
+    def get_wireguards_for_host(self, context, host):
+        """Get all wireguards that should be configured on the given host.
+
+        This is used by the L3 agent extension to sync wireguard
+        configurations on startup or reconnection.
+
+        Returns only wireguards with complete peer configuration that are
+        associated with routers hosted on the specified host.
+        """
+        # Get all routers hosted on this host
+        agents = self.l3_plugin.get_l3_agents(
+            context, filters={'host': [host]})
+        if not agents:
+            LOG.debug("No L3 agents found for host %s", host)
+            return []
+
+        agent_id = agents[0]['id']
+        routers = self.l3_plugin.list_routers_on_l3_agent(
+            context, agent_id)['routers']
+        router_ids = [r['id'] for r in routers]
+
+        if not router_ids:
+            LOG.debug("No routers found on host %s", host)
+            return []
+
+        # Get all wireguards for these routers
+        wireguards = self.get_wireguards(
+            context, filters={'router_id': router_ids})
+
+        # Filter to only return wireguards with complete peer configuration
+        result = [wg for wg in wireguards if self._is_peer_config_complete(wg)]
+        LOG.info("Returning %d wireguards for host %s", len(result), host)
+        return result

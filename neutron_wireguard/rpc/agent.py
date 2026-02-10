@@ -45,6 +45,16 @@ class WireguardServerRpcApi:
         cctxt.cast(context, 'update_wireguard_status',
                    wireguard_id=wireguard_id, status=status)
 
+    def get_wireguards_for_host(self, context, host):
+        """Request all wireguards that should be configured on this host.
+
+        This is used by the agent to sync configurations on startup.
+        Returns a list of wireguard dictionaries with complete configuration.
+        """
+        cctxt = self.client.prepare()
+        LOG.info("Requesting wireguard sync for host %s", host)
+        return cctxt.call(context, 'get_wireguards_for_host', host=host)
+
 
 class WireguardAgentRpcCallback:
     """RPC callback handler for calls from server."""

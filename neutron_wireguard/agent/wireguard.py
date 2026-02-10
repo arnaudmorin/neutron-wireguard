@@ -13,17 +13,22 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from concurrent import futures
 import os
 
 from neutron.agent.linux import ip_lib
 from neutron_lib.agent import l3_extension
 from neutron_lib import constants as lib_constants
+from neutron_lib import context as n_context
 from neutron_lib import rpc as n_rpc
 from oslo_config import cfg
 from oslo_log import log as logging
 
 from neutron_wireguard.common import topics
 from neutron_wireguard.rpc import agent as rpc_agent
+
+# Maximum number of threads for parallel sync
+PARALLEL_SYNC_MAX_WORKERS = 10
 
 LOG = logging.getLogger(__name__)
 
@@ -47,9 +52,73 @@ PersistentKeepalive = 25
 class WireguardAgent(l3_extension.L3AgentExtension):
     """wireguard agent support to be used by Neutron L3 agent."""
 
+    def __init__(self, host, conf):
+        LOG.debug("Initializing wireguard agent")
+        self.agent_api = None
+        self.conf = conf
+        self.host = host
+        self.server_rpc = rpc_agent.WireguardServerRpcApi()
+
     def initialize(self, connection, driver_type):
         LOG.debug("Initializing wireguard agent extension")
         self._register_rpc_consumers()
+        self._sync_wireguards_from_server()
+
+    def consume_api(self, agent_api):
+        LOG.debug("Loading consume_api for wireguard")
+        self.agent_api = agent_api
+
+    def _sync_wireguards_from_server(self):
+        """Sync wireguard configurations from the server on startup.
+
+        Fetches all wireguards that should be configured on this host
+        and ensures they are properly set up using parallel execution.
+        """
+        LOG.info("Syncing wireguard configurations from server for host %s",
+                 self.host)
+        context = n_context.get_admin_context()
+        try:
+            wireguards = self.server_rpc.get_wireguards_for_host(
+                context, self.host)
+            LOG.info("Received %d wireguards to sync", len(wireguards))
+
+            if not wireguards:
+                return
+
+            def sync_one(wg):
+                try:
+                    self._sync_wireguard(context, wg)
+                    return wg['id'], None
+                except Exception as e:
+                    LOG.error("Failed to sync wireguard %s: %s", wg['id'], e)
+                    return wg['id'], e
+
+            with futures.ThreadPoolExecutor(
+                    max_workers=PARALLEL_SYNC_MAX_WORKERS) as executor:
+                results = list(executor.map(sync_one, wireguards))
+
+            failed = [wg_id for wg_id, error in results if error is not None]
+            if failed:
+                LOG.warning("Failed to sync %d wireguards: %s",
+                            len(failed), failed)
+        except Exception as e:
+            LOG.error("Failed to fetch wireguards from server: %s", e)
+
+    def _sync_wireguard(self, context, wireguard):
+        """Sync a single wireguard configuration.
+
+        Creates or updates the wireguard interface as needed.
+        """
+        router_id = wireguard['router_id']
+        wireguard_id = wireguard['id']
+        namespace = self._get_snat_namespace(router_id)
+        if_name = self._get_interface_name(wireguard_id)
+
+        LOG.info("Syncing wireguard %s (interface %s) in namespace %s",
+                 wireguard_id, if_name, namespace)
+
+        # Use update_wireguard which handles both create and update cases
+        self.update_wireguard(context, wireguard)
 
     def _register_rpc_consumers(self):
         self.conn = n_rpc.Connection()
@@ -57,17 +126,6 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         self.conn.create_consumer(
             topics.WIREGUARD_AGENT_TOPIC, endpoints, fanout=False)
         self.conn.consume_in_threads()
-
-    def consume_api(self, agent_api):
-        LOG.debug("Loading consume_api for wireguard")
-        self.agent_api = agent_api
-
-    def __init__(self, host, conf):
-        LOG.debug("Initializing wireguard agent")
-        self.agent_api = None
-        self.conf = conf
-        self.host = host
-        self.server_rpc = rpc_agent.WireguardServerRpcApi()
 
     def _get_snat_namespace(self, router_id):
         """Get the SNAT namespace name for a router."""
