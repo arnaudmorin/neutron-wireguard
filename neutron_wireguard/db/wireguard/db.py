@@ -13,16 +13,21 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from neutron.db.models import agent as agent_model
+from neutron.db.models import l3agent as l3agent_model
 from neutron_lib import constants as lib_constants
 from neutron_lib.db import api as db_api
 from neutron_lib.db import model_query
 from neutron_lib.db import utils as db_utils
 from neutron_lib import exceptions as n_exc
 from neutron_lib.exceptions import l3 as l3_exception
+from oslo_log import log as logging
 from oslo_utils import uuidutils
 
 from neutron_wireguard.db.wireguard import models
 from neutron_wireguard.extensions import wireguard as wg_ext
+
+LOG = logging.getLogger(__name__)
 
 
 class WireguardNotFound(n_exc.NotFound):
@@ -124,6 +129,60 @@ class WireguardPluginDb(wg_ext.WireguardPluginBase):
             wg_db = self._get_wireguard(context, wireguard_id)
             wg_db.status = status
         return self._make_wireguard_dict(wg_db)
+
+    def _is_peer_config_complete(self, wg):
+        """Check if peer configuration is complete.
+
+        Returns True if all required peer fields are set:
+        - peer_public_key
+        - peer_endpoint
+        - peer_allowed_ips (non-empty)
+        """
+        return (wg.get('peer_public_key') and
+                wg.get('peer_endpoint') and
+                wg.get('peer_allowed_ips'))
+
+    def get_wireguards_for_host(self, context, host):
+        """Get all wireguards that should be configured on the given host.
+
+        This is used by the L3 agent extension to sync wireguard
+        configurations on startup or reconnection.
+
+        Returns only wireguards with complete peer configuration that are
+        associated with routers hosted on the specified host.
+        """
+        with db_api.CONTEXT_READER.using(context):
+            agent_ids = [
+                a.id for a in
+                context.session.query(agent_model.Agent.id).filter_by(
+                    host=host,
+                    agent_type=lib_constants.AGENT_TYPE_L3,
+                ).all()
+            ]
+            if not agent_ids:
+                LOG.debug("No L3 agents found for host %s", host)
+                return []
+
+            router_ids = [
+                b.router_id for b in
+                context.session.query(
+                    l3agent_model.RouterL3AgentBinding.router_id
+                ).filter(
+                    l3agent_model.RouterL3AgentBinding.l3_agent_id.in_(
+                        agent_ids)
+                ).all()
+            ]
+
+        if not router_ids:
+            LOG.debug("No routers found on host %s", host)
+            return []
+
+        wireguards = self.get_wireguards(
+            context, filters={'router_id': router_ids})
+        result = [wg for wg in wireguards
+                  if self._is_peer_config_complete(wg)]
+        LOG.info("Returning %d wireguards for host %s", len(result), host)
+        return result
 
     def check_router_in_use(self, context, router_id):
         """Check if a router is in use by wireguard."""
