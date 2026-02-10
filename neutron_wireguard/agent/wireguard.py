@@ -23,12 +23,16 @@ from neutron_lib import context as n_context
 from neutron_lib import rpc as n_rpc
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_service import loopingcall
 
 from neutron_wireguard.common import topics
 from neutron_wireguard.rpc import agent as rpc_agent
 
 # Maximum number of threads for parallel sync
 PARALLEL_SYNC_MAX_WORKERS = 10
+
+# Interval in seconds between periodic sync runs
+PERIODIC_SYNC_INTERVAL = 60
 
 LOG = logging.getLogger(__name__)
 
@@ -63,10 +67,19 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         LOG.debug("Initializing wireguard agent extension")
         self._register_rpc_consumers()
         self._sync_wireguards_from_server()
+        self._start_periodic_sync()
 
     def consume_api(self, agent_api):
         LOG.debug("Loading consume_api for wireguard")
         self.agent_api = agent_api
+
+    def _start_periodic_sync(self):
+        """Start a periodic task to sync wireguard configurations."""
+        LOG.info("Starting periodic wireguard sync every %d seconds",
+                 PERIODIC_SYNC_INTERVAL)
+        self._periodic_sync_loop = loopingcall.FixedIntervalLoopingCall(
+            self._sync_wireguards_from_server)
+        self._periodic_sync_loop.start(interval=PERIODIC_SYNC_INTERVAL)
 
     def _sync_wireguards_from_server(self):
         """Sync wireguard configurations from the server on startup.
