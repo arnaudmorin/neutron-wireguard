@@ -15,6 +15,7 @@
 
 from concurrent import futures
 import os
+import threading
 
 from neutron.agent.linux import ip_lib
 from neutron_lib.agent import l3_extension
@@ -53,6 +54,34 @@ PersistentKeepalive = 25
 """
 
 
+class WireguardLockManager:
+    """Manages per-wireguard locks to prevent concurrent operations.
+
+    This ensures that only one operation (create, update, delete, sync)
+    can be performed on a specific wireguard at a time.
+    """
+
+    def __init__(self):
+        self._locks = {}
+        self._master_lock = threading.Lock()
+
+    def get_lock(self, wireguard_id):
+        """Get or create a lock for a specific wireguard.
+
+        Returns:
+            threading.Lock for the specified wireguard_id
+        """
+        with self._master_lock:
+            if wireguard_id not in self._locks:
+                self._locks[wireguard_id] = threading.Lock()
+            return self._locks[wireguard_id]
+
+    def remove_lock(self, wireguard_id):
+        """Remove a lock for a deleted wireguard."""
+        with self._master_lock:
+            self._locks.pop(wireguard_id, None)
+
+
 class WireguardAgent(l3_extension.L3AgentExtension):
     """wireguard agent support to be used by Neutron L3 agent."""
 
@@ -62,6 +91,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         self.conf = conf
         self.host = host
         self.server_rpc = rpc_agent.WireguardServerRpcApi()
+        self._lock_manager = WireguardLockManager()
 
     def initialize(self, connection, driver_type):
         LOG.debug("Initializing wireguard agent extension")
@@ -296,6 +326,15 @@ class WireguardAgent(l3_extension.L3AgentExtension):
 
     def create_wireguard(self, context, wireguard):
         """Create wireguard interface and apply configuration."""
+        wireguard_id = wireguard['id']
+        lock = self._lock_manager.get_lock(wireguard_id)
+
+        with lock:
+            LOG.debug("Acquired lock for wireguard %s (create)", wireguard_id)
+            self._do_create_wireguard(context, wireguard)
+
+    def _do_create_wireguard(self, context, wireguard):
+        """Internal method to create wireguard (must hold lock)."""
         router_id = wireguard['router_id']
         wireguard_id = wireguard['id']
         namespace = self._get_snat_namespace(router_id)
@@ -324,6 +363,15 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         If the interface doesn't exist (e.g., after agent restart),
         it will be created before applying the configuration.
         """
+        wireguard_id = wireguard['id']
+        lock = self._lock_manager.get_lock(wireguard_id)
+
+        with lock:
+            LOG.debug("Acquired lock for wireguard %s (update)", wireguard_id)
+            self._do_update_wireguard(context, wireguard)
+
+    def _do_update_wireguard(self, context, wireguard):
+        """Internal method to update wireguard (must hold lock)."""
         router_id = wireguard['router_id']
         wireguard_id = wireguard['id']
         namespace = self._get_snat_namespace(router_id)
@@ -350,6 +398,17 @@ class WireguardAgent(l3_extension.L3AgentExtension):
 
     def delete_wireguard(self, context, wireguard_id, router_id):
         """Delete wireguard interface and configuration."""
+        lock = self._lock_manager.get_lock(wireguard_id)
+
+        with lock:
+            LOG.debug("Acquired lock for wireguard %s (delete)", wireguard_id)
+            self._do_delete_wireguard(context, wireguard_id, router_id)
+
+        # Clean up the lock after deletion
+        self._lock_manager.remove_lock(wireguard_id)
+
+    def _do_delete_wireguard(self, context, wireguard_id, router_id):
+        """Internal method to delete wireguard (must hold lock)."""
         namespace = self._get_snat_namespace(router_id)
         if_name = self._get_interface_name(wireguard_id)
 
