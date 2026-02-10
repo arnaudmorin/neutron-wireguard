@@ -335,6 +335,42 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         self._execute(namespace, remove_cmd, check_exit_code=False)
         LOG.info("Removed address scope mark rule for interface %s", if_name)
 
+    def _sync_routes_for_allowed_ips(self, namespace, if_name, allowed_ips):
+        """Sync routes to match the current allowed IPs.
+
+        Removes stale routes and adds missing ones.
+        """
+        # Get current routes for this interface
+        list_cmd = ['ip', 'route', 'show', 'dev', if_name]
+        try:
+            output = self._execute(namespace, list_cmd)
+            current_routes = set()
+            if output:
+                for line in output.strip().split('\n'):
+                    if line:
+                        # First word is the destination
+                        current_routes.add(line.split()[0])
+        except Exception:
+            current_routes = set()
+
+        desired_routes = set(allowed_ips)
+
+        # Remove stale routes
+        for cidr in current_routes - desired_routes:
+            remove_cmd = ['ip', 'route', 'del', cidr, 'dev', if_name]
+            self._execute(namespace, remove_cmd, check_exit_code=False)
+            LOG.info("Removed stale route for %s via %s", cidr, if_name)
+
+        # Add missing routes
+        for cidr in desired_routes - current_routes:
+            add_cmd = ['ip', 'route', 'add', cidr, 'dev', if_name]
+            try:
+                self._execute(namespace, add_cmd)
+                LOG.info("Added route for %s via interface %s", cidr, if_name)
+            except Exception as e:
+                LOG.warning("Failed to add route for %s via %s: %s",
+                            cidr, if_name, e)
+
     def _ensure_wg_interface(self, namespace, if_name):
         """Ensure the wireguard interface exists, create if missing."""
         if not self._interface_exists(namespace, if_name):
@@ -368,6 +404,9 @@ class WireguardAgent(l3_extension.L3AgentExtension):
                                         wireguard.get('ipaddress'))
             self._bring_up_wg_interface(namespace, if_name)
             self._add_address_scope_mark(namespace, if_name)
+            # Add routes for peer allowed IPs
+            allowed_ips = wireguard.get('peer_allowed_ips', [])
+            self._sync_routes_for_allowed_ips(namespace, if_name, allowed_ips)
             # Report success to plugin
             self.server_rpc.update_wireguard_status(
                 context, wireguard_id, lib_constants.ACTIVE)
@@ -407,6 +446,9 @@ class WireguardAgent(l3_extension.L3AgentExtension):
                 self._bring_up_wg_interface(namespace, if_name)
             # Ensure address scope mark rule exists (idempotent)
             self._add_address_scope_mark(namespace, if_name)
+            # Sync routes for peer allowed IPs (add missing, remove stale)
+            allowed_ips = wireguard.get('peer_allowed_ips', [])
+            self._sync_routes_for_allowed_ips(namespace, if_name, allowed_ips)
             # Report success to plugin
             self.server_rpc.update_wireguard_status(
                 context, wireguard_id, lib_constants.ACTIVE)
