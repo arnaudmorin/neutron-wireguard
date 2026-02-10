@@ -194,6 +194,25 @@ class WireguardAgent(l3_extension.L3AgentExtension):
                                         extra_ok_codes=extra_ok_codes,
                                         privsep_exec=True)
 
+    def _build_allowed_ips(self, wireguard):
+        """Build the AllowedIPs list including the wireguard's own IP.
+
+        Combines the configured peer_allowed_ips with the wireguard's
+        ipaddress to ensure traffic to the local interface is allowed.
+        """
+        allowed_ips = list(wireguard.get('peer_allowed_ips', []))
+
+        ipaddress = wireguard.get('ipaddress')
+        if ipaddress:
+            # Add the wireguard's own IP to allowed IPs
+            # If it's already a CIDR, use as-is; otherwise add /32
+            if '/' not in ipaddress:
+                ipaddress = ipaddress + '/32'
+            if ipaddress not in allowed_ips:
+                allowed_ips.append(ipaddress)
+
+        return allowed_ips
+
     def _write_wireguard_conf(self, wireguard):
         """Write the wireguard configuration file."""
         router_id = wireguard['router_id']
@@ -204,7 +223,8 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         if not os.path.exists(conf_dir):
             os.makedirs(conf_dir, mode=0o755)
 
-        peer_allowed_ips = ', '.join(wireguard.get('peer_allowed_ips', []))
+        allowed_ips = self._build_allowed_ips(wireguard)
+        peer_allowed_ips = ', '.join(allowed_ips)
         conf_content = WIREGUARD_CONF_TEMPLATE.format(
             private_key=wireguard.get('private_key', ''),
             port=wireguard.get('port', 51820),
