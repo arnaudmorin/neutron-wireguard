@@ -382,39 +382,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
 
     def create_wireguard(self, context, wireguard):
         """Create wireguard interface and apply configuration."""
-        wireguard_id = wireguard['id']
-        lock = self._lock_manager.get_lock(wireguard_id)
-
-        with lock:
-            LOG.debug("Acquired lock for wireguard %s (create)", wireguard_id)
-            self._do_create_wireguard(context, wireguard)
-
-    def _do_create_wireguard(self, context, wireguard):
-        """Internal method to create wireguard (must hold lock)."""
-        router_id = wireguard['router_id']
-        wireguard_id = wireguard['id']
-        namespace = self._get_snat_namespace(router_id)
-        if_name = self._get_interface_name(wireguard_id)
-
-        try:
-            conf_path = self._write_wireguard_conf(wireguard)
-            self._create_wg_interface(namespace, if_name)
-            self._configure_wg_interface(namespace, if_name, conf_path)
-            self._set_interface_address(namespace, if_name,
-                                        wireguard.get('ipaddress'))
-            self._bring_up_wg_interface(namespace, if_name)
-            self._add_address_scope_mark(namespace, if_name)
-            # Add routes for peer allowed IPs
-            allowed_ips = wireguard.get('peer_allowed_ips', [])
-            self._sync_routes_for_allowed_ips(namespace, if_name, allowed_ips)
-            # Report success to plugin
-            self.server_rpc.update_wireguard_status(
-                context, wireguard_id, lib_constants.ACTIVE)
-            LOG.info("wireguard %s is now ACTIVE", wireguard_id)
-        except Exception as e:
-            LOG.error("Failed to create wireguard %s: %s", wireguard_id, e)
-            self.server_rpc.update_wireguard_status(
-                context, wireguard_id, lib_constants.ERROR)
+        self._configure_wireguard(context, wireguard)
 
     def update_wireguard(self, context, wireguard):
         """Update wireguard configuration on an existing interface.
@@ -422,15 +390,25 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         If the interface doesn't exist (e.g., after agent restart),
         it will be created before applying the configuration.
         """
+        self._configure_wireguard(context, wireguard)
+
+    def _configure_wireguard(self, context, wireguard):
+        """Configure a wireguard interface (create or update).
+
+        This method is idempotent - it will create the interface if it
+        doesn't exist, or update it if it does. All operations (interface
+        creation, address assignment, routes, iptables rules) are designed
+        to be safely re-applied.
+        """
         wireguard_id = wireguard['id']
         lock = self._lock_manager.get_lock(wireguard_id)
 
         with lock:
-            LOG.debug("Acquired lock for wireguard %s (update)", wireguard_id)
-            self._do_update_wireguard(context, wireguard)
+            LOG.debug("Acquired lock for wireguard %s", wireguard_id)
+            self._do_configure_wireguard(context, wireguard)
 
-    def _do_update_wireguard(self, context, wireguard):
-        """Internal method to update wireguard (must hold lock)."""
+    def _do_configure_wireguard(self, context, wireguard):
+        """Internal method to configure wireguard (must hold lock)."""
         router_id = wireguard['router_id']
         wireguard_id = wireguard['id']
         namespace = self._get_snat_namespace(router_id)
@@ -452,9 +430,9 @@ class WireguardAgent(l3_extension.L3AgentExtension):
             # Report success to plugin
             self.server_rpc.update_wireguard_status(
                 context, wireguard_id, lib_constants.ACTIVE)
-            LOG.info("wireguard %s updated and ACTIVE", wireguard_id)
+            LOG.info("wireguard %s configured and ACTIVE", wireguard_id)
         except Exception as e:
-            LOG.error("Failed to update wireguard %s: %s", wireguard_id, e)
+            LOG.error("Failed to configure wireguard %s: %s", wireguard_id, e)
             self.server_rpc.update_wireguard_status(
                 context, wireguard_id, lib_constants.ERROR)
 
