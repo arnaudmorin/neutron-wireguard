@@ -20,3 +20,5 @@ venv/
 *.sw?
 !/.gitignore
 
+# ai stuff
+.claude
