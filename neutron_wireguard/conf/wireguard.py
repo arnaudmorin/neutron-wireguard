@@ -21,6 +21,10 @@ WIREGUARD_OPTS = [
                min=0,
                help='Interval in seconds between periodic wireguard sync '
                     'runs. Set to 0 to disable periodic sync.'),
+    cfg.IntOpt('sync_max_workers',
+               default=10,
+               min=1,
+               help='Maximum number of threads for parallel wireguard sync.'),
 ]
 
 

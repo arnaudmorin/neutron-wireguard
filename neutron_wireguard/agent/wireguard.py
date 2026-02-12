@@ -30,8 +30,6 @@ from neutron_wireguard.common import topics
 from neutron_wireguard.conf.wireguard import register_wireguard_opts
 from neutron_wireguard.rpc import agent as rpc_agent
 
-# Maximum number of threads for parallel sync
-PARALLEL_SYNC_MAX_WORKERS = 10
 
 LOG = logging.getLogger(__name__)
 
@@ -139,7 +137,8 @@ class WireguardAgent(l3_extension.L3AgentExtension):
                     return wg['id'], e
 
             with futures.ThreadPoolExecutor(
-                    max_workers=PARALLEL_SYNC_MAX_WORKERS) as executor:
+                    max_workers=self.conf.wireguard.sync_max_workers
+                    ) as executor:
                 results = list(executor.map(sync_one, wireguards))
 
             failed = [wg_id for wg_id, error in results if error is not None]
