@@ -13,12 +13,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_config import cfg
 
-from neutron_wireguard.conf import wireguard as wg_conf
+WIREGUARD_OPTS = [
+    cfg.IntOpt('periodic_sync_interval',
+               default=300,
+               min=0,
+               help='Interval in seconds between periodic wireguard sync '
+                    'runs. Set to 0 to disable periodic sync.'),
+]
 
 
-def list_opts():
-    """Return a list of oslo.config options for neutron-wireguard."""
-    return [
-        ('wireguard', wg_conf.WIREGUARD_OPTS),
-    ]
+def register_wireguard_opts(conf=cfg.CONF):
+    conf.register_opts(WIREGUARD_OPTS, 'wireguard')

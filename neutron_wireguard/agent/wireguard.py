@@ -27,13 +27,11 @@ from oslo_log import log as logging
 from oslo_service import loopingcall
 
 from neutron_wireguard.common import topics
+from neutron_wireguard.conf.wireguard import register_wireguard_opts
 from neutron_wireguard.rpc import agent as rpc_agent
 
 # Maximum number of threads for parallel sync
 PARALLEL_SYNC_MAX_WORKERS = 10
-
-# Interval in seconds between periodic sync runs
-PERIODIC_SYNC_INTERVAL = 60
 
 LOG = logging.getLogger(__name__)
 
@@ -105,11 +103,15 @@ class WireguardAgent(l3_extension.L3AgentExtension):
 
     def _start_periodic_sync(self):
         """Start a periodic task to sync wireguard configurations."""
+        interval = self.conf.wireguard.periodic_sync_interval
+        if not interval:
+            LOG.info("Periodic wireguard sync is disabled")
+            return
         LOG.info("Starting periodic wireguard sync every %d seconds",
-                 PERIODIC_SYNC_INTERVAL)
+                 interval)
         self._periodic_sync_loop = loopingcall.FixedIntervalLoopingCall(
             self._sync_wireguards_from_server)
-        self._periodic_sync_loop.start(interval=PERIODIC_SYNC_INTERVAL)
+        self._periodic_sync_loop.start(interval=interval)
 
     def _sync_wireguards_from_server(self):
         """Sync wireguard configurations from the server on startup.
@@ -479,4 +481,5 @@ class L3WithWireguard(WireguardAgent):
             self.conf = conf
         else:
             self.conf = cfg.CONF
+        register_wireguard_opts(self.conf)
         super().__init__(host=self.conf.host, conf=self.conf)
