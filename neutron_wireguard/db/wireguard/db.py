@@ -135,11 +135,9 @@ class WireguardPluginDb(wg_ext.WireguardPluginBase):
 
         Returns True if all required peer fields are set:
         - peer_public_key
-        - peer_endpoint
         - peer_allowed_ips (non-empty)
         """
         return (wg.get('peer_public_key') and
-                wg.get('peer_endpoint') and
                 wg.get('peer_allowed_ips'))
 
     def get_wireguards_for_host(self, context, host):

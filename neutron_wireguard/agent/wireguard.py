@@ -45,9 +45,7 @@ ListenPort = {port}
 [Peer]
 PublicKey = {peer_public_key}
 AllowedIPs = {peer_allowed_ips}
-Endpoint = {peer_endpoint}
-PersistentKeepalive = 25
-"""
+{peer_extra}"""
 
 
 class WireguardLockManager:
@@ -226,12 +224,19 @@ class WireguardAgent(l3_extension.L3AgentExtension):
 
         allowed_ips = self._build_allowed_ips(wireguard)
         peer_allowed_ips = ', '.join(allowed_ips)
+
+        peer_extra_lines = []
+        peer_endpoint = wireguard.get('peer_endpoint')
+        if peer_endpoint:
+            peer_extra_lines.append('Endpoint = %s' % peer_endpoint)
+            peer_extra_lines.append('PersistentKeepalive = 25')
+
         conf_content = WIREGUARD_CONF_TEMPLATE.format(
             private_key=wireguard.get('private_key', ''),
             port=wireguard.get('port', 51820),
             peer_public_key=wireguard.get('peer_public_key', ''),
             peer_allowed_ips=peer_allowed_ips,
-            peer_endpoint=wireguard.get('peer_endpoint', ''),
+            peer_extra='\n'.join(peer_extra_lines) + '\n',
         )
 
         with open(conf_path, 'w') as f:
