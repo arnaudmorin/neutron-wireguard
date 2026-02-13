@@ -33,11 +33,6 @@ from neutron_wireguard.rpc import agent as rpc_agent
 
 LOG = logging.getLogger(__name__)
 
-# Address scope mark used by Neutron L3 agent to allow forwarding
-# between networks in the same address scope. Traffic entering from
-# WireGuard interfaces must be marked to pass the scope check.
-ADDRESS_SCOPE_MARK = '0x4000000/0xffff0000'
-
 WIREGUARD_CONF_TEMPLATE = """[Interface]
 PrivateKey = {private_key}
 ListenPort = {port}
@@ -309,37 +304,59 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         except Exception:
             return False
 
-    def _add_address_scope_mark(self, namespace, if_name):
-        """Add iptables mangle rule to mark incoming traffic.
-
-        This marks traffic entering from the WireGuard interface with
-        the address scope mark, allowing it to be forwarded to networks
-        in the same address scope (bypassing neutron-l3-agent-scope check).
-        """
-        # Check if rule already exists
-        check_cmd = ['iptables', '-t', 'mangle', '-C', 'PREROUTING',
-                     '-i', if_name, '-j', 'MARK',
-                     '--set-xmark', ADDRESS_SCOPE_MARK]
+    def _get_wireguard_interfaces(self, namespace):
+        """List wireguard interfaces (wg-*) in a namespace."""
         try:
-            self._execute(namespace, check_cmd)
-            LOG.debug("Address scope mark rule already exists for %s", if_name)
-            return
+            output = self._execute(namespace,
+                                   ['ip', '-o', 'link', 'show', 'type',
+                                    'wireguard'])
         except Exception:
-            pass  # Rule doesn't exist, add it
+            return []
+        if_names = []
+        if output:
+            for line in output.strip().split('\n'):
+                if line:
+                    # Format: "N: if_name@...: ..."
+                    if_names.append(line.split(':')[1].strip().split('@')[0])
+        return if_names
 
-        add_cmd = ['iptables', '-t', 'mangle', '-A', 'PREROUTING',
-                   '-i', if_name, '-j', 'MARK',
-                   '--set-xmark', ADDRESS_SCOPE_MARK]
-        self._execute(namespace, add_cmd)
-        LOG.info("Added address scope mark rule for interface %s", if_name)
+    def _get_router_iptables_manager(self, router_id):
+        """Get the iptables manager for a router's namespace.
 
-    def _remove_address_scope_mark(self, namespace, if_name):
-        """Remove iptables mangle rule for address scope marking."""
-        remove_cmd = ['iptables', '-t', 'mangle', '-D', 'PREROUTING',
-                      '-i', if_name, '-j', 'MARK',
-                      '--set-xmark', ADDRESS_SCOPE_MARK]
-        self._execute(namespace, remove_cmd, check_exit_code=False)
-        LOG.info("Removed address scope mark rule for interface %s", if_name)
+        Returns the snat_iptables_manager for DVR routers, falling back
+        to the regular iptables_manager for legacy routers.
+        Returns (router_info, iptables_manager) or (None, None).
+        """
+        if not self.agent_api:
+            return None, None
+        ri = self.agent_api.get_router_info(router_id)
+        if not ri:
+            return None, None
+        ipt_mgr = getattr(ri, 'snat_iptables_manager', None)
+        if not ipt_mgr:
+            ipt_mgr = ri.iptables_manager
+        return ri, ipt_mgr
+
+    def _restore_address_scope_marks(self, router_id):
+        """Re-add address scope marks for all wireguard interfaces on a router.
+
+        Called from the update_router / add_router hooks after the L3 agent
+        has processed the router and potentially rebuilt the scope chain.
+        """
+        ri, ipt_mgr = self._get_router_iptables_manager(router_id)
+        if not ipt_mgr:
+            return
+        namespace = self._get_snat_namespace(router_id)
+        if_names = self._get_wireguard_interfaces(namespace)
+        if not if_names:
+            return
+        mark = ri.get_address_scope_mark_mask()
+        with ipt_mgr.defer_apply():
+            for if_name in if_names:
+                rule = ri.address_scope_mangle_rule(if_name, mark)
+                ipt_mgr.ipv4['mangle'].add_rule('scope', rule)
+        LOG.debug("Restored address scope marks for %d wireguard "
+                  "interfaces on router %s", len(if_names), router_id)
 
     def _sync_routes_for_allowed_ips(self, namespace, if_name, allowed_ips):
         """Sync routes to match the current allowed IPs.
@@ -429,7 +446,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
             if created:
                 self._bring_up_wg_interface(namespace, if_name)
             # Ensure address scope mark rule exists (idempotent)
-            self._add_address_scope_mark(namespace, if_name)
+            self._restore_address_scope_marks(router_id)
             # Sync routes for peer allowed IPs (add missing, remove stale)
             allowed_ips = wireguard.get('peer_allowed_ips', [])
             self._sync_routes_for_allowed_ips(namespace, if_name, allowed_ips)
@@ -458,15 +475,27 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         namespace = self._get_snat_namespace(router_id)
         if_name = self._get_interface_name(wireguard_id)
 
-        self._remove_address_scope_mark(namespace, if_name)
+        self._remove_address_scope_mark(router_id, if_name)
         self._destroy_wg_interface(namespace, if_name)
         self._remove_wireguard_conf(router_id, wireguard_id)
 
+    def _remove_address_scope_mark(self, router_id, if_name):
+        """Remove address scope mark rule for a wireguard interface."""
+        ri, ipt_mgr = self._get_router_iptables_manager(router_id)
+        if not ipt_mgr:
+            return
+        mark = ri.get_address_scope_mark_mask()
+        rule = ri.address_scope_mangle_rule(if_name, mark)
+        with ipt_mgr.defer_apply():
+            ipt_mgr.ipv4['mangle'].remove_rule('scope', rule)
+
     def add_router(self, context, data):
-        pass
+        # data['id'] is router_id
+        self._restore_address_scope_marks(data['id'])
 
     def update_router(self, context, data):
-        pass
+        # data['id'] is router_id
+        self._restore_address_scope_marks(data['id'])
 
     def delete_router(self, context, data):
         pass
