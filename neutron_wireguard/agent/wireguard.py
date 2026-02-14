@@ -351,12 +351,20 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         if not if_names:
             return
         mark = ri.get_address_scope_mark_mask()
+        existing_rules = {r.rule for r in ipt_mgr.ipv4['mangle'].rules
+                          if r.chain == 'scope'}
+        new_rules = []
+        for if_name in if_names:
+            rule = ri.address_scope_mangle_rule(if_name, mark)
+            if rule not in existing_rules:
+                new_rules.append(rule)
+        if not new_rules:
+            return
         with ipt_mgr.defer_apply():
-            for if_name in if_names:
-                rule = ri.address_scope_mangle_rule(if_name, mark)
+            for rule in new_rules:
                 ipt_mgr.ipv4['mangle'].add_rule('scope', rule)
         LOG.debug("Restored address scope marks for %d wireguard "
-                  "interfaces on router %s", len(if_names), router_id)
+                  "interfaces on router %s", len(new_rules), router_id)
 
     def _sync_routes_for_allowed_ips(self, namespace, if_name, allowed_ips):
         """Sync routes to match the current allowed IPs.
@@ -445,7 +453,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
                                            wireguard.get('ipaddress'))
             if created:
                 self._bring_up_wg_interface(namespace, if_name)
-            # Ensure address scope mark rule exists (idempotent)
+            # Ensure address scope mark rule exists
             self._restore_address_scope_marks(router_id)
             # Sync routes for peer allowed IPs (add missing, remove stale)
             allowed_ips = wireguard.get('peer_allowed_ips', [])
