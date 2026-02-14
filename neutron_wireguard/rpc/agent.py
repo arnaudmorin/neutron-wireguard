@@ -40,7 +40,7 @@ class WireguardServerRpcApi:
     def update_wireguard_agent_status(self, context, wireguard_id, status, host):
         """Report wireguard status to the server."""
         cctxt = self.client.prepare()
-        LOG.info("Sending status update for wireguard %s: %s (host=%s)",
+        LOG.debug("Sending status update for wireguard %s: %s (host=%s)",
                  wireguard_id, status, host)
         cctxt.cast(context, 'update_wireguard_agent_status',
                    wireguard_id=wireguard_id, status=status, host=host)
@@ -52,7 +52,7 @@ class WireguardServerRpcApi:
         Returns a list of wireguard dictionaries with complete configuration.
         """
         cctxt = self.client.prepare()
-        LOG.info("Requesting wireguard sync for host %s", host)
+        LOG.debug("Requesting wireguard sync for host %s", host)
         return cctxt.call(context, 'get_wireguards_for_host', host=host)
 
 

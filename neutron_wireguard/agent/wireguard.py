@@ -110,7 +110,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         Fetches all wireguards that should be configured on this host
         and ensures they are properly set up using parallel execution.
         """
-        LOG.info("Syncing wireguard configurations from server for host %s",
+        LOG.info("Requesting wireguards from server (host %s)",
                  self.host)
         context = n_context.get_admin_context()
         try:
