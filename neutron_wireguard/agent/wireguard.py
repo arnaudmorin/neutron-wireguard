@@ -207,6 +207,25 @@ class WireguardAgent(l3_extension.L3AgentExtension):
 
         return allowed_ips
 
+    def _build_wireguard_conf(self, wireguard):
+        """Build the wireguard configuration file content."""
+        allowed_ips = self._build_allowed_ips(wireguard)
+        peer_allowed_ips = ', '.join(allowed_ips)
+
+        peer_extra_lines = []
+        peer_endpoint = wireguard.get('peer_endpoint')
+        if peer_endpoint:
+            peer_extra_lines.append('Endpoint = %s' % peer_endpoint)
+            peer_extra_lines.append('PersistentKeepalive = 25')
+
+        return WIREGUARD_CONF_TEMPLATE.format(
+            private_key=wireguard.get('private_key', ''),
+            port=wireguard.get('port', 51820),
+            peer_public_key=wireguard.get('peer_public_key', ''),
+            peer_allowed_ips=peer_allowed_ips,
+            peer_extra='\n'.join(peer_extra_lines) + '\n',
+        )
+
     def _write_wireguard_conf(self, wireguard):
         """Write the wireguard configuration file."""
         router_id = wireguard['router_id']
@@ -217,22 +236,7 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         if not os.path.exists(conf_dir):
             os.makedirs(conf_dir, mode=0o755)
 
-        allowed_ips = self._build_allowed_ips(wireguard)
-        peer_allowed_ips = ', '.join(allowed_ips)
-
-        peer_extra_lines = []
-        peer_endpoint = wireguard.get('peer_endpoint')
-        if peer_endpoint:
-            peer_extra_lines.append('Endpoint = %s' % peer_endpoint)
-            peer_extra_lines.append('PersistentKeepalive = 25')
-
-        conf_content = WIREGUARD_CONF_TEMPLATE.format(
-            private_key=wireguard.get('private_key', ''),
-            port=wireguard.get('port', 51820),
-            peer_public_key=wireguard.get('peer_public_key', ''),
-            peer_allowed_ips=peer_allowed_ips,
-            peer_extra='\n'.join(peer_extra_lines) + '\n',
-        )
+        conf_content = self._build_wireguard_conf(wireguard)
 
         with open(conf_path, 'w') as f:
             f.write(conf_content)
@@ -303,6 +307,54 @@ class WireguardAgent(l3_extension.L3AgentExtension):
             return True
         except Exception:
             return False
+
+    def _get_interface_address(self, namespace, if_name):
+        """Get the current CIDR address on the interface.
+
+        Returns the address string (e.g. '10.0.0.1/24') or None.
+        """
+        try:
+            output = self._execute(namespace,
+                                   ['ip', '-o', 'addr', 'show', 'dev',
+                                    if_name])
+        except Exception:
+            return None
+        if output:
+            for line in output.strip().split('\n'):
+                parts = line.split()
+                # Format: "N: if_name inet <addr> ..."
+                try:
+                    inet_idx = parts.index('inet')
+                    return parts[inet_idx + 1]
+                except (ValueError, IndexError):
+                    continue
+        return None
+
+    def _is_config_changed(self, wireguard, namespace, if_name):
+        """Check if the wireguard config differs from what's applied.
+
+        Returns True if reconfiguration is needed.
+        """
+        # Check config file content
+        router_id = wireguard['router_id']
+        wireguard_id = wireguard['id']
+        conf_path = self._get_wireguard_conf_path(router_id, wireguard_id)
+        desired_conf = self._build_wireguard_conf(wireguard)
+        try:
+            with open(conf_path, 'r') as f:
+                current_conf = f.read()
+        except (OSError, IOError):
+            return True
+        if current_conf != desired_conf:
+            return True
+
+        # Check interface address
+        desired_addr = wireguard.get('ipaddress')
+        current_addr = self._get_interface_address(namespace, if_name)
+        if desired_addr != current_addr:
+            return True
+
+        return False
 
     def _get_wireguard_interfaces(self, namespace):
         """List wireguard interfaces (wg-*) in a namespace."""
@@ -446,8 +498,14 @@ class WireguardAgent(l3_extension.L3AgentExtension):
         if_name = self._get_interface_name(wireguard_id)
 
         try:
-            conf_path = self._write_wireguard_conf(wireguard)
             created = self._ensure_wg_interface(namespace, if_name)
+            if (not created and
+                    not self._is_config_changed(wireguard, namespace,
+                                                if_name)):
+                LOG.debug("wireguard %s unchanged, skipping reconfiguration",
+                          wireguard_id)
+                return
+            conf_path = self._write_wireguard_conf(wireguard)
             self._configure_wg_interface(namespace, if_name, conf_path)
             self._update_interface_address(namespace, if_name,
                                            wireguard.get('ipaddress'))
