@@ -112,18 +112,25 @@ class WireguardPluginDb(wg_ext.WireguardPluginBase):
     def get_wireguard(self, context, wireguard_id, fields=None):
         """Get a wireguard by ID."""
         wg_db = self._get_wireguard(context, wireguard_id)
-        return self._make_wireguard_dict(wg_db, fields)
+        result = self._make_wireguard_dict(wg_db, fields)
+        if not context.is_admin:
+            result.pop('agent_statuses', None)
+        return result
 
     @db_api.CONTEXT_READER
     def get_wireguards(self, context, filters=None, fields=None):
         """List wireguard."""
-        return model_query.get_collection(
+        results = model_query.get_collection(
             context,
             models.Wireguard,
             self._make_wireguard_dict,
             filters=filters,
             fields=fields,
         )
+        if not context.is_admin:
+            for r in results:
+                r.pop('agent_statuses', None)
+        return results
 
     def update_wireguard_agent_status(self, context, wireguard_id, host,
                                       status):
