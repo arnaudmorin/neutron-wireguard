@@ -51,6 +51,7 @@ class WireguardPluginDb(wg_ext.WireguardPluginBase):
 
     def _make_wireguard_dict(self, wireguard, fields=None):
         """Convert a wireguard DB object to a dictionary."""
+        agent_bindings = getattr(wireguard, 'agent_bindings', [])
         res = {
             'id': wireguard['id'],
             'project_id': wireguard['project_id'],
@@ -64,6 +65,7 @@ class WireguardPluginDb(wg_ext.WireguardPluginBase):
             'peer_allowed_ips': wireguard['peer_allowed_ips'] or [],
             'router_id': wireguard['router_id'],
             'status': wireguard['status'],
+            'agent_statuses': {b.host: b.status for b in agent_bindings},
         }
         return db_utils.resource_fields(res, fields)
 
@@ -123,12 +125,54 @@ class WireguardPluginDb(wg_ext.WireguardPluginBase):
             fields=fields,
         )
 
-    def update_wireguard_status(self, context, wireguard_id, status):
-        """Update the status of a wireguard."""
+    def update_wireguard_agent_status(self, context, wireguard_id, host,
+                                      status):
+        """Update the per-agent status and recompute aggregate status."""
         with db_api.CONTEXT_WRITER.using(context):
             wg_db = self._get_wireguard(context, wireguard_id)
-            wg_db.status = status
-        return self._make_wireguard_dict(wg_db)
+
+            # Upsert the agent binding
+            binding = context.session.query(
+                models.WireguardAgentBinding
+            ).filter_by(
+                wireguard_id=wireguard_id, host=host
+            ).first()
+            if binding:
+                binding.status = status
+            else:
+                binding = models.WireguardAgentBinding(
+                    wireguard_id=wireguard_id,
+                    host=host,
+                    status=status,
+                )
+                context.session.add(binding)
+
+            # Flush so the aggregate query sees the upserted row
+            context.session.flush()
+
+            # Compute aggregate status from all bindings
+            all_bindings = context.session.query(
+                models.WireguardAgentBinding
+            ).filter_by(wireguard_id=wireguard_id).all()
+            statuses = {b.status for b in all_bindings}
+
+            if statuses == {lib_constants.ACTIVE}:
+                aggregate = lib_constants.ACTIVE
+            elif statuses == {lib_constants.ERROR}:
+                aggregate = lib_constants.ERROR
+            elif statuses == {lib_constants.ACTIVE, lib_constants.ERROR}:
+                # Yes, it's a custom status
+                aggregate = 'DEGRADED'
+            else:
+                aggregate = status
+
+            wg_db.status = aggregate
+
+            # Expire the relationship so _make_wireguard_dict reloads it
+            context.session.expire(wg_db, ['agent_bindings'])
+            result = self._make_wireguard_dict(wg_db)
+
+        return result
 
     def _is_peer_config_complete(self, wg):
         """Check if peer configuration is complete.

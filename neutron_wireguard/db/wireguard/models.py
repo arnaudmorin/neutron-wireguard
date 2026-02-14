@@ -41,3 +41,21 @@ class Wireguard(model_base.BASEV2, model_base.HasId, model_base.HasProject):
         nullable=False,
     )
     router = orm.relationship(l3.Router)
+    agent_bindings = orm.relationship(
+        'WireguardAgentBinding',
+        cascade='all, delete-orphan',
+        lazy='subquery',
+    )
+
+
+class WireguardAgentBinding(model_base.BASEV2):
+    """Tracks per-agent status for a wireguard interface."""
+
+    __tablename__ = 'wireguard_agent_bindings'
+
+    wireguard_id = sa.Column(sa.String(36),
+                             sa.ForeignKey('wireguards.id',
+                                           ondelete='CASCADE'),
+                             primary_key=True)
+    host = sa.Column(sa.String(255), primary_key=True)
+    status = sa.Column(sa.String(16), nullable=False)

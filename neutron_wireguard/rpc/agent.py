@@ -37,13 +37,13 @@ class WireguardServerRpcApi:
                                        version='1.0')
         self.client = n_rpc.get_client(target)
 
-    def update_wireguard_status(self, context, wireguard_id, status):
+    def update_wireguard_agent_status(self, context, wireguard_id, status, host):
         """Report wireguard status to the server."""
         cctxt = self.client.prepare()
-        LOG.info("Sending status update for wireguard %s: %s",
-                 wireguard_id, status)
-        cctxt.cast(context, 'update_wireguard_status',
-                   wireguard_id=wireguard_id, status=status)
+        LOG.info("Sending status update for wireguard %s: %s (host=%s)",
+                 wireguard_id, status, host)
+        cctxt.cast(context, 'update_wireguard_agent_status',
+                   wireguard_id=wireguard_id, status=status, host=host)
 
     def get_wireguards_for_host(self, context, host):
         """Request all wireguards that should be configured on this host.

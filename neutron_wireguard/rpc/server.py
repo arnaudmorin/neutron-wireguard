@@ -61,12 +61,12 @@ class WireguardServerRpcCallback:
     def __init__(self, plugin):
         self.plugin = plugin
 
-    def update_wireguard_status(self, context, wireguard_id, status):
+    def update_wireguard_agent_status(self, context, wireguard_id, status, host):
         """Handle status update from agent."""
-        LOG.info("Received status update for wireguard %s: %s",
-                 wireguard_id, status)
-        result = self.plugin.update_wireguard_status(context, wireguard_id,
-                                                     status)
+        LOG.info("Received status update for wireguard %s: %s (host=%s)",
+                 wireguard_id, status, host)
+        result = self.plugin.update_wireguard_agent_status(
+            context, wireguard_id, host, status)
         return result
 
     def get_wireguards_for_host(self, context, host):

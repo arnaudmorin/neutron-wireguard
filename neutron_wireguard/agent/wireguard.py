@@ -459,13 +459,13 @@ class WireguardAgent(l3_extension.L3AgentExtension):
             allowed_ips = wireguard.get('peer_allowed_ips', [])
             self._sync_routes_for_allowed_ips(namespace, if_name, allowed_ips)
             # Report success to plugin
-            self.server_rpc.update_wireguard_status(
-                context, wireguard_id, lib_constants.ACTIVE)
+            self.server_rpc.update_wireguard_agent_status(
+                context, wireguard_id, lib_constants.ACTIVE, self.host)
             LOG.info("wireguard %s configured and ACTIVE", wireguard_id)
         except Exception as e:
             LOG.error("Failed to configure wireguard %s: %s", wireguard_id, e)
-            self.server_rpc.update_wireguard_status(
-                context, wireguard_id, lib_constants.ERROR)
+            self.server_rpc.update_wireguard_agent_status(
+                context, wireguard_id, lib_constants.ERROR, self.host)
 
     def delete_wireguard(self, context, wireguard_id, router_id):
         """Delete wireguard interface and configuration."""
