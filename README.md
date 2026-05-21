@@ -203,6 +203,12 @@ curl http://localhost:9696/v2.0/wireguards/ \
   -H "X-Auth-Token: $TOKEN"
 ```
 
+### Neutron wireguard client
+
+I wrote a simple neutron wireguard openstack extension for the client.
+
+You can find it here: https://github.com/arnaudmorin/neutron-wireguard-client
+
 ## License
 
 Apache License, Version 2.0
